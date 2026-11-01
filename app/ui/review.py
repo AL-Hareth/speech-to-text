@@ -2,13 +2,54 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import (QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit,
-                               QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QComboBox, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit,
+                               QPushButton, QStyledItemDelegate, QTableWidget, QTableWidgetItem,
+                               QVBoxLayout, QWidget)
 
 from app.export import fmt_mmss
+from app.link import set_manual_link
 from app.paragraphs import is_rtl
 
-COL_TIME, COL_SPK, COL_TEXT = 0, 1, 2
+COL_TIME, COL_SPK, COL_SEC, COL_TEXT = 0, 1, 2, 3
+NONE_LABEL = "— none —"
+
+
+def link_label(p: dict) -> str:
+    link = p.get("link") if isinstance(p.get("link"), dict) else None
+    if link and link.get("label"):
+        conf = link.get("confidence")
+        s = link["label"] + (f", p.{link['page']}" if link.get("page") else "")
+        if link.get("manual"):
+            return s + "  ✎"
+        return s + (f"  {round(100 * conf)}%" if isinstance(conf, (int, float)) else "") + \
+            ("  ? unsure" if p.get("unsure") else "")
+    if p.get("not_in_book"):
+        return "✗ not in book"
+    return ""
+
+
+class SectionDelegate(QStyledItemDelegate):
+    """Combo box editor to re-assign a paragraph to a chapter section."""
+
+    def __init__(self, panel: "ReviewPanel"):
+        super().__init__(panel)
+        self.panel = panel
+
+    def createEditor(self, parent, option, index):
+        cb = QComboBox(parent)
+        cb.addItem(NONE_LABEL, None)
+        for s in self.panel.sections():
+            cb.addItem(f"{s['label']} — {s['title'][:60]} (p.{s.get('page')})", s["id"])
+        return cb
+
+    def setEditorData(self, editor, index):
+        p = self.panel.result["paragraphs"][index.row()]
+        sid = (p.get("link") or {}).get("section_id") if isinstance(p.get("link"), dict) else None
+        i = editor.findData(sid)
+        editor.setCurrentIndex(max(0, i))
+
+    def setModelData(self, editor, model, index):
+        self.panel.assign(index.row(), editor.currentData())
 
 
 def _norm(s: str) -> str:
@@ -42,8 +83,9 @@ class ReviewPanel(QWidget):
         bar.addWidget(self.rename_btn)
         lay.addLayout(bar)
 
-        self.table = QTableWidget(0, 3)
-        self.table.setHorizontalHeaderLabels(["Time", "Speaker", "Text"])
+        self.table = QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels(["Time", "Speaker", "Chapter link", "Text"])
+        self.table.setItemDelegateForColumn(COL_SEC, SectionDelegate(self))
         self.table.verticalHeader().setVisible(False)
         self.table.setWordWrap(True)
         self.table.setAlternatingRowColors(False)
@@ -51,7 +93,9 @@ class ReviewPanel(QWidget):
         h.setSectionResizeMode(COL_TIME, QHeaderView.ResizeToContents)
         h.setSectionResizeMode(COL_SPK, QHeaderView.Interactive)
         h.setSectionResizeMode(COL_TEXT, QHeaderView.Stretch)
+        h.setSectionResizeMode(COL_SEC, QHeaderView.Interactive)
         self.table.setColumnWidth(COL_SPK, 110)
+        self.table.setColumnWidth(COL_SEC, 170)
         self.table.itemChanged.connect(self._on_item_changed)
         lay.addWidget(self.table, 1)
 
@@ -67,12 +111,36 @@ class ReviewPanel(QWidget):
             t.setFlags(t.flags() & ~Qt.ItemIsEditable)
             self.table.setItem(r, COL_TIME, t)
             self.table.setItem(r, COL_SPK, QTableWidgetItem(p.get("speaker") or ""))
+            sec = QTableWidgetItem(link_label(p))
+            if not self.sections():
+                sec.setFlags(sec.flags() & ~Qt.ItemIsEditable)
+            sec.setToolTip("Double-click to re-assign to a chapter section")
+            self.table.setItem(r, COL_SEC, sec)
             txt = QTableWidgetItem(p.get("text", ""))
             txt.setTextAlignment((Qt.AlignRight if p.get("rtl") else Qt.AlignLeft) | Qt.AlignVCenter)
             self.table.setItem(r, COL_TEXT, txt)
+        self.table.setColumnHidden(COL_SEC, not self.sections())
         self.table.resizeRowsToContents()
         self._loading = False
         self.apply_filter()
+
+    def sections(self) -> list[dict]:
+        ch = (self.result or {}).get("chapter") or {}
+        return ch.get("sections") or []
+
+    def assign(self, row: int, section_id) -> None:
+        """Manual re-assignment from the Chapter link column."""
+        if not self.result:
+            return
+        from app.analyze import refresh_after_edit
+        p = self.result["paragraphs"][row]
+        sec = next((s for s in self.sections() if s["id"] == section_id), None)
+        set_manual_link(p, sec)
+        refresh_after_edit(self.result)
+        self._loading = True
+        self.table.item(row, COL_SEC).setText(link_label(p))
+        self._loading = False
+        self.changed.emit()
 
     def _on_item_changed(self, item: QTableWidgetItem) -> None:
         if self._loading or not self.result:

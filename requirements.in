@@ -1,0 +1,12 @@
+# Top-level runtime deps. Lock with:
+#   uv pip compile requirements.in --python-version 3.12 --python-platform windows -o requirements.txt
+faster-whisper==1.2.1
+reportlab==4.4.4
+arabic-reshaper==3.0.0
+python-bidi==0.6.6
+pymupdf==1.26.7
+PySide6-Essentials==6.10.0
+python-pptx==1.0.2
+rapidocr-onnxruntime==1.4.4
+sentence-transformers==6.2.0
+numpy

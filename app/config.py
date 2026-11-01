@@ -35,6 +35,29 @@ MODEL_FILE_PATTERNS = [
 ]
 HF_ENDPOINT = "https://huggingface.co"
 
+# Auxiliary models (same download/lock mechanism). Weights: safetensors ONLY (no pickle .bin).
+AUX_MODELS: dict[str, dict] = {
+    "embedder": {
+        "repo": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2", "revision": None,
+        "patterns": ["config.json", "modules.json", "sentence_bert_config.json",
+                     "config_sentence_transformers.json", "model.safetensors", "tokenizer.json",
+                     "tokenizer_config.json", "special_tokens_map.json", "sentencepiece.bpe.model",
+                     "1_Pooling/config.json"],
+    },
+}
+
+# ---- Chapter parsing limits -----------------------------------------------
+MAX_CHAPTER_PAGES = 400
+MAX_OCR_PAGES = 60
+MAX_CHAPTER_CHARS = 2_000_000
+PPTX_MAX_ENTRIES = 5000
+PPTX_MAX_UNCOMPRESSED = 600 * 1024**2
+PPTX_MAX_RATIO = 120
+
+# ---- Linking thresholds (cosine similarity) --------------------------------
+LINK_SURE = 0.50
+LINK_UNSURE = 0.35
+
 # ---- Paragraphing ---------------------------------------------------------
 PARAGRAPH_PAUSE_S = 1.5
 PARAGRAPH_MAX_WORDS = 140

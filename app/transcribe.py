@@ -71,13 +71,13 @@ def _write_lock(lock: dict) -> None:
 
 def _hash_files(folder: Path) -> dict[str, dict]:
     out = {}
-    for f in sorted(folder.iterdir()):
+    for f in sorted(folder.rglob("*")):
         if f.is_file():
             h = hashlib.sha256()
             with open(f, "rb") as fh:
                 while b := fh.read(1 << 20):
                     h.update(b)
-            out[f.name] = {"sha256": h.hexdigest(), "size": f.stat().st_size}
+            out[f.relative_to(folder).as_posix()] = {"sha256": h.hexdigest(), "size": f.stat().st_size}
     return out
 
 
@@ -88,11 +88,12 @@ def ensure_model(name: str, allow_download: bool = True) -> Path:
     first download. File SHA256s are recorded at first download and re-checked
     (by size on every load, full hash after every download).
     """
-    if name not in config.MODELS:
+    registry = {**config.MODELS, **config.AUX_MODELS}
+    if name not in registry:
         raise ValueError(f"Unknown model: {name}")
     if not config.HF_ENDPOINT.startswith("https://"):
         raise RuntimeError("Model endpoint must be HTTPS")
-    spec = config.MODELS[name]
+    spec = registry[name]
     lock = _read_lock()
     entry = lock.get(name, {})
     revision = spec["revision"] or entry.get("revision")
@@ -100,7 +101,7 @@ def ensure_model(name: str, allow_download: bool = True) -> Path:
     from huggingface_hub import HfApi, snapshot_download
 
     common = dict(repo_id=spec["repo"], cache_dir=str(config.models_dir()),
-                  allow_patterns=config.MODEL_FILE_PATTERNS, endpoint=config.HF_ENDPOINT,
+                  allow_patterns=spec.get("patterns", config.MODEL_FILE_PATTERNS), endpoint=config.HF_ENDPOINT,
                   token=False)
     if revision and _SHA.match(revision):
         try:

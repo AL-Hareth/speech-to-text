@@ -53,16 +53,48 @@ class TranscribeWorker(QObject):
     progress = Signal(int, str, float)
     fileDone = Signal(int, dict)
     fileFailed = Signal(int, str)
+    warning = Signal(str)
     finished = Signal()
 
     def __init__(self, files: list[str], model: str, vocab: list[str],
-                 headings: list[str] | None = None,
-                 model_factory: Callable[[str], object] | None = None):
+                 chapter: str | None = None,
+                 model_factory: Callable[[str], object] | None = None,
+                 embedder_factory: Callable[[], object] | None = None,
+                 ocr_factory: Callable[[], object] | None = None):
         super().__init__()
         self.files, self.model, self.vocab = list(files), model, list(vocab)
-        self.headings = headings or []
+        self.chapter = chapter
         self.model_factory = model_factory or cached_model
+        self.embedder_factory = embedder_factory
+        self.ocr_factory = ocr_factory
         self._cancel = threading.Event()
+
+    def _load_chapter(self):
+        from app.analyze import load_chapter
+        self.progress.emit(0, "chapter", 0.0)
+        try:
+            return load_chapter(self.chapter, self.ocr_factory)
+        except InputError as e:
+            self.warning.emit(f"Chapter skipped: {e}")
+        except Exception as e:  # noqa: BLE001
+            log.exception("chapter parse failed")
+            self.warning.emit(f"Chapter skipped: {friendly_error(e)}")
+        return None
+
+    def _embedder(self):
+        if self.embedder_factory:
+            return self.embedder_factory()
+        from app.embed import default_embedder
+        return default_embedder()
+
+    def _analyze(self, i: int, res: dict, chapter) -> None:
+        from app.analyze import analyze
+        try:
+            analyze(res, self._embedder(), chapter, Path(self.chapter).name if chapter else None,
+                    progress=lambda st, fr: self.progress.emit(i, st, fr))
+        except Exception as e:  # noqa: BLE001 - transcript is still usable
+            log.exception("analysis failed")
+            self.warning.emit("Topics/chapter linking unavailable: " + friendly_error(e))
 
     def cancel(self) -> None:
         self._cancel.set()
@@ -70,6 +102,9 @@ class TranscribeWorker(QObject):
     @Slot()
     def run(self) -> None:
         try:
+            chapter = self._load_chapter() if self.chapter else None
+            from app.chapter import headings
+            hd = headings(chapter[1]) if chapter else []
             for i, f in enumerate(self.files):
                 if self._cancel.is_set():
                     break
@@ -77,12 +112,17 @@ class TranscribeWorker(QObject):
                 def prog(stage: str, frac: float, _i=i) -> None:
                     if self._cancel.is_set():
                         raise Cancelled()
-                    self.progress.emit(_i, stage, float(frac))
+                    if stage != "done":                      # 'done' is emitted after analysis
+                        self.progress.emit(_i, stage, float(frac))
 
                 try:
                     res = process_file(f, model_name=self.model, vocab=self.vocab,
-                                       headings=self.headings, progress=prog,
+                                       headings=hd, progress=prog,
                                        model_factory=self.model_factory)
+                    if self._cancel.is_set():
+                        raise Cancelled()
+                    self._analyze(i, res, chapter)
+                    self.progress.emit(i, "done", 1.0)
                     self.fileDone.emit(i, res)
                 except Cancelled:
                     self.fileFailed.emit(i, "Cancelled — progress was saved and will resume next time.")

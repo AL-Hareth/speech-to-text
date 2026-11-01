@@ -11,6 +11,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
 from app.settings import Settings, clean_terms  # noqa: E402
+from tests.helpers import HashEmbedder  # noqa: E402
 from tests.test_phase1 import StubModel, _gen  # noqa: E402
 
 
@@ -53,7 +54,7 @@ def test_full_ui_flow(qapp, tmp_path, monkeypatch):
     monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
     s = Settings()
     s.output_dir = str(tmp_path / "out")
-    win = MainWindow(settings=s, model_factory=lambda n: StubModel())
+    win = MainWindow(settings=s, model_factory=lambda n: StubModel(), embedder_factory=lambda: HashEmbedder())
     win.show()
     a = _gen(tmp_path / "a.mp3", False)
     v = _gen(tmp_path / "b.mp4", True)
@@ -69,7 +70,7 @@ def test_full_ui_flow(qapp, tmp_path, monkeypatch):
 
     # review: edit text + speaker, search
     t = win.review.table
-    t.item(0, 2).setText("Edited  paragraph about ReLU")
+    t.item(0, 3).setText("Edited  paragraph about ReLU")
     t.item(0, 1).setText("Doctor")
     assert win.dirty and win.save_btn.isEnabled()
     win.review.search.setText("relu")
@@ -128,7 +129,7 @@ def test_cancel_and_friendly_errors(qapp, tmp_path, monkeypatch):
                     yield s
             return slow(), info
 
-    win = MainWindow(settings=Settings(), model_factory=lambda n: Slow())
+    win = MainWindow(settings=Settings(), model_factory=lambda n: Slow(), embedder_factory=lambda: HashEmbedder())
     win.add_files([str(_gen(tmp_path / "c.wav", False))])
     win.start()
     _wait(qapp, lambda: "Transcribing" in win.status.text())

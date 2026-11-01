@@ -46,10 +46,13 @@ def heading(text: str, obj: str = "h2") -> QLabel:
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, settings: Settings | None = None, model_factory=None):
+    def __init__(self, settings: Settings | None = None, model_factory=None, embedder_factory=None,
+                 ocr_factory=None):
         super().__init__()
         self.settings = settings or Settings.load()
-        self.model_factory = model_factory          # tests inject a stub
+        self.model_factory = model_factory          # tests inject stubs
+        self.embedder_factory = embedder_factory
+        self.ocr_factory = ocr_factory
         self.files: list[str] = []
         self.chapter: str | None = None
         self.results: dict[str, dict] = {}          # source path -> result
@@ -255,7 +258,8 @@ class MainWindow(QMainWindow):
     def set_chapter(self, paths: list[str]) -> None:
         self.chapter = paths[0] if paths else None
         if self.chapter:
-            self.chapter_drop.hint.setText(f"✓ {Path(self.chapter).name}\n(linking arrives in a later update)")
+            self.chapter_drop.hint.setText(f"✓ {Path(self.chapter).name}  — linked after transcription\n"
+                                           "(click to choose a different file)")
 
     def change_project(self, name: str) -> None:
         self.settings.set_vocab(self.vocab.toPlainText())
@@ -279,7 +283,11 @@ class MainWindow(QMainWindow):
             return
         self._collect_settings()
         self.worker = TranscribeWorker(self.files, self.settings.model, self.settings.vocab(),
-                                       model_factory=self.model_factory)
+                                       chapter=self.chapter, model_factory=self.model_factory,
+                                       embedder_factory=self.embedder_factory,
+                                       ocr_factory=self.ocr_factory)
+        self.worker.warning.connect(self._on_warning)
+        self._warnings: list[str] = []
         self.worker.progress.connect(self._on_progress)
         self.worker.fileDone.connect(self._on_file_done)
         self.worker.fileFailed.connect(self._on_file_failed)
@@ -306,9 +314,11 @@ class MainWindow(QMainWindow):
         n = len(self._batch)
         self.steps.set_stage(stage)
         step = StepBar.STAGE_TO_STEP.get(stage, 0)
-        within = (step + (frac if stage == "transcribe" else 1.0 if stage == "done" else 0.0)) / 4
+        within = (step + (frac if stage == "transcribe" else 1.0 if stage == "done" else 0.0)) / 5
         self.progress.setValue(int(1000 * (i + min(1.0, within)) / n))
-        label = {"hash": "Checking file", "extract": "Extracting audio",
+        label = {"chapter": "Reading chapter (OCR if scanned)", "embed": "Analysing topics",
+                 "link": "Linking to chapter", "topics": "Finding topics", "analysis_done": "Finishing",
+                 "hash": "Checking file", "extract": "Extracting audio",
                  "load_model": "Loading model (first run downloads it — may take a while)",
                  "transcribe": f"Transcribing… {frac * 100:.0f}%", "paragraphs": "Building paragraphs",
                  "done": "Done"}.get(stage, stage)
@@ -326,6 +336,10 @@ class MainWindow(QMainWindow):
         if self.result_pick.findData(path) < 0:
             self.result_pick.addItem(Path(path).name, path)
 
+    def _on_warning(self, msg: str) -> None:
+        self._warnings.append(msg)
+        self.set_status(msg)
+
     def _on_file_failed(self, i: int, msg: str) -> None:
         self._failures += 1
         it = self._item(i)
@@ -340,7 +354,8 @@ class MainWindow(QMainWindow):
         if ok and not self._failures:
             self.steps.set_stage("done")
             self.progress.setValue(1000)
-            self.set_status(f"Finished {ok} file(s). Open the Review tab to check and export.")
+            extra = ("  Note: " + self._warnings[-1]) if self._warnings else ""
+            self.set_status(f"Finished {ok} file(s). Open the Review tab to check and export.{extra}")
             self.tabs.setCurrentIndex(1)
         elif self._failures:
             self.set_status(f"Finished with problems: {ok} ok, {self._failures} failed. See the file list.")
@@ -385,12 +400,27 @@ class MainWindow(QMainWindow):
                 != QMessageBox.Yes:
             return
         revert_edits(res)
-        from app import cache as c
-        orig = c.read_json(res["file_hash"], f"transcript_{res['cache_key']}")
+        orig = cache.read_json(res["file_hash"], f"transcript_{res['cache_key']}")
         if orig:
             orig["cache_key"] = res["cache_key"]
+            for k in ("topics", "read_on_own", "chapter"):      # keep analysis, drop manual edits
+                if k in res:
+                    orig[k] = res[k]
+            if res.get("chapter"):
+                self._relink(orig)
             self.results[self.result_pick.currentData()] = orig
         self.show_result()
+
+    def _relink(self, res: dict) -> None:
+        """Re-run analysis (cached embeddings) after revert."""
+        from app.analyze import analyze, load_chapter
+        from app.embed import default_embedder
+        try:
+            emb = self.embedder_factory() if self.embedder_factory else default_embedder()
+            ch = load_chapter(self.chapter, self.ocr_factory) if self.chapter else None
+            analyze(res, emb, ch, res["chapter"]["name"] if ch else None)
+        except Exception:  # noqa: BLE001
+            log.exception("re-analysis failed")
 
     def output_dir(self) -> Path:
         return Path(self.settings.output_dir) if self.settings.output_dir else default_output_dir()

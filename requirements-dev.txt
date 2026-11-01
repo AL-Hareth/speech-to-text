@@ -1,4 +1,4 @@
--r requirements.txt
+# Dev/test tools (not shipped). Runtime deps are hash-locked in requirements.txt.
 pytest==9.0.3
 bandit==1.8.6
 pip-audit==2.9.0

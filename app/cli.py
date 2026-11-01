@@ -41,6 +41,7 @@ def main(argv: list[str] | None = None) -> int:
     t.add_argument("-o", "--out", default=".", help="output folder")
     t.add_argument("-m", "--model", default=config.DEFAULT_MODEL, choices=sorted(config.MODELS))
     t.add_argument("--vocab", help="text file with one custom term per line")
+    t.add_argument("--chapter", help="optional textbook chapter (PDF or PPTX) to link against")
     t.add_argument("--no-timestamps", action="store_true")
     t.add_argument("--pdf", action="store_true", help="also export the study PDF")
     t.add_argument("--notes", action="store_true", help="PDF: wide ruled notes margin")
@@ -61,12 +62,28 @@ def main(argv: list[str] | None = None) -> int:
     except InputError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 2
+    chapter = None
+    if args.chapter:
+        from app.analyze import load_chapter
+        try:
+            chapter = load_chapter(args.chapter)
+        except InputError as e:
+            print(f"Chapter skipped: {e}", file=sys.stderr)
+    from app.chapter import headings
+    hd = headings(chapter[1]) if chapter else []
     for f in args.files:
         try:
             def prog(stage: str, frac: float, _n=Path(f).name) -> None:
                 print(f"\r{_n}: {stage} {frac*100:5.1f}%", end="", flush=True)
 
-            res = process_file(f, model_name=args.model, vocab=vocab, progress=prog)
+            res = process_file(f, model_name=args.model, vocab=vocab, headings=hd, progress=prog)
+            try:
+                from app.analyze import analyze
+                from app.embed import default_embedder
+                analyze(res, default_embedder(), chapter, Path(args.chapter).name if chapter else None)
+            except Exception as e:  # noqa: BLE001 - transcript still exported
+                logging.getLogger(__name__).exception("analysis failed")
+                print(f"\nNote: topics/chapter linking unavailable ({type(e).__name__}).", file=sys.stderr)
             stem = safe_filename(Path(f).stem, default="transcript")
             out = Path(args.out)
             p1 = write_text(out, stem + ".txt", to_txt(res["paragraphs"], not args.no_timestamps))

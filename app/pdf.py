@@ -337,7 +337,9 @@ def build_pdf(result: dict, out_dir: Path, filename: str, opts: PdfOptions | Non
     opts = opts or PdfOptions()
     ts.register_fonts()
     paras = result.get("paragraphs", [])
-    sections = [s for s in (sections or auto_sections(paras, opts.section_minutes))
+    if read_on_own is None:
+        read_on_own = result.get("read_on_own") or []
+    sections = [s for s in (sections or result.get("topics") or auto_sections(paras, opts.section_minutes))
                 if 0 <= int(s.get("start_para", -1)) < len(paras)]
     title = opts.title or Path(result.get("source_name", "Lecture")).stem
     pages: dict[str, int] = {}
