@@ -24,7 +24,7 @@ FFMPEG_TIMEOUT_S = 3600
 # download is resolved to its commit SHA and recorded in models/lock.json
 # (trust-on-first-use); later loads verify file SHA256s against that lock.
 MODELS: dict[str, dict] = {
-    "small": {"repo": "Systran/faster-whisper-small", "revision": None},
+    "small": {"repo": "Systran/faster-whisper-small", "revision": "536b0662742c02347bc0e980a01041f333bce120"},
     "medium": {"repo": "Systran/faster-whisper-medium", "revision": None},
     "large-v3": {"repo": "Systran/faster-whisper-large-v3", "revision": None},
 }
@@ -38,7 +38,8 @@ HF_ENDPOINT = "https://huggingface.co"
 # Auxiliary models (same download/lock mechanism). Weights: safetensors ONLY (no pickle .bin).
 AUX_MODELS: dict[str, dict] = {
     "embedder": {
-        "repo": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2", "revision": None,
+        "repo": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+        "revision": "e8f8c211226b894fcb81acc59f3b34ba3efd5f42",
         "patterns": ["config.json", "modules.json", "sentence_bert_config.json",
                      "config_sentence_transformers.json", "model.safetensors", "tokenizer.json",
                      "tokenizer_config.json", "special_tokens_map.json", "sentencepiece.bpe.model",
@@ -48,7 +49,7 @@ AUX_MODELS: dict[str, dict] = {
     # ECAPA-TDNN speaker embeddings. Only the weights are fetched (no HyperPyYAML -> no code exec);
     # loaded with torch.load(weights_only=True) (restricted unpickler, tensors only).
     "ecapa": {
-        "repo": "speechbrain/spkrec-ecapa-voxceleb", "revision": None,
+        "repo": "speechbrain/spkrec-ecapa-voxceleb", "revision": "0f99f2d0ebe89ac095bcc5903c4dd8f72b367286",
         "patterns": ["embedding_model.ckpt"], "required": ["embedding_model.ckpt"],
     },
 }
