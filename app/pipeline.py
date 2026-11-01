@@ -43,10 +43,12 @@ def process_file(
     key = cache.settings_key(model=model_name, prompt=prompt)
     final_name, partial_name = f"transcript_{key}", f"partial_{key}"
 
-    cached = cache.read_json(fhash, final_name)
-    if _valid_result(cached):
-        prog("done", 1.0)
-        return cached
+    for name in (f"edited_{key}", final_name):      # user edits from the review screen win
+        cached = cache.read_json(fhash, name)
+        if _valid_result(cached):
+            cached["cache_key"] = key
+            prog("done", 1.0)
+            return cached
 
     partial = cache.read_json(fhash, partial_name)
     segments: list[dict] = partial["segments"] if _valid_partial(partial) else []
@@ -94,10 +96,40 @@ def process_file(
         "segments": segments,
         "paragraphs": build_paragraphs(segments),
     }
+    result["cache_key"] = key
     cache.write_json(fhash, final_name, result)
     cache.delete(fhash, partial_name)
     prog("done", 1.0)
     return result
+
+
+def save_edits(result: dict) -> None:
+    """Persist review-screen edits (paragraph text / speakers) next to the original transcript."""
+    if not _valid_result(result) or not isinstance(result.get("cache_key"), str):
+        raise ValueError("invalid result")
+    from app.paragraphs import is_rtl
+    old = result["segments"]
+    new_segs: list[dict] = []
+    for p in result["paragraphs"]:
+        p["text"] = str(p.get("text", ""))[:20000]
+        p["rtl"] = is_rtl(p["text"])
+        a, b = (p.get("seg_range") or [None, None])[:2]
+        spk = p.get("speaker")
+        if p.get("edited") or not (isinstance(a, int) and isinstance(b, int) and 0 <= a <= b < len(old)):
+            segs = [{"start": p["start"], "end": p["end"], "text": p["text"], "words": []}]
+        else:
+            segs = [dict(s) for s in old[a:b + 1]]
+        p["seg_range"] = [len(new_segs), len(new_segs) + len(segs) - 1]
+        for s in segs:
+            if spk:
+                s["speaker"] = spk
+            new_segs.append(s)
+    result["segments"] = new_segs
+    cache.write_json(result["file_hash"], f"edited_{result['cache_key']}", result)
+
+
+def revert_edits(result: dict) -> None:
+    cache.delete(result["file_hash"], f"edited_{result['cache_key']}")
 
 
 def _valid_segments(segs: object) -> bool:
