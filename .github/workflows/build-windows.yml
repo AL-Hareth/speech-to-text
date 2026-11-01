@@ -3,6 +3,7 @@ name: Windows build
 on:
   push:
     branches: [main, master, "ccr-*"]
+    tags: ["v*"]          # a version tag builds, tests AND publishes a GitHub Release
   pull_request:
   workflow_dispatch:
 
@@ -18,7 +19,7 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 150
     env:
-      LS_VERSION: "0.1.${{ github.run_number }}"
+      LS_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('0.1.{0}', github.run_number) }}
       PYTHON: python
       PYTHONUTF8: "1"
     steps:
@@ -107,7 +108,7 @@ jobs:
       - name: Upload installer + checksums
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
-          name: LectureScribe-${{ env.LS_VERSION }}-windows
+          name: LectureScribe-windows
           path: |
             dist/installer/*.exe
             dist/SHA256SUMS.txt
@@ -120,3 +121,51 @@ jobs:
           name: e2e-outputs
           path: e2e/out/
           if-no-files-found: warn
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write     # only this job may create the release
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: LectureScribe-windows
+          path: release
+
+      - name: Verify checksums and publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          cd release
+          ls -la . installer
+          setup=$(ls installer/*.exe)
+          want=$(grep -i "installer" SHA256SUMS.txt | awk '{print $1}')
+          have=$(sha256sum "$setup" | awk '{print $1}')
+          test "$want" = "$have" || { echo "installer checksum mismatch"; exit 1; }
+          cp "$setup" .
+          cat > notes.md <<NOTES
+          ## LectureScribe ${TAG} — Windows (64-bit)
+
+          Free, fully local lecture transcription (Arabic + English), chapter linking and study-PDF export.
+          No account, no API keys, no telemetry. Speech models download once on first use, then everything runs offline.
+
+          **Install:** download \`$(basename "$setup")\`, run it (per-user install, no admin rights needed).
+          Windows SmartScreen may warn because the installer is not code-signed: choose *More info → Run anyway*.
+
+          **Verify (recommended):** \`certutil -hashfile $(basename "$setup") SHA256\` must match:
+
+          \`\`\`
+          $(cat SHA256SUMS.txt)
+          \`\`\`
+
+          Built and tested by CI (unit tests, pip-audit, bandit, secret scan, GUI/CLI self-test, end-to-end audio + video
+          run with real models, silent install/uninstall): ${{ github.server_url }}/${REPO}/actions/runs/${{ github.run_id }}
+          NOTES
+          sed -i 's/^          //' notes.md
+          gh release create "$TAG" "$(basename "$setup")" SHA256SUMS.txt \
+            --repo "$REPO" --title "LectureScribe $TAG" --notes-file notes.md --verify-tag
