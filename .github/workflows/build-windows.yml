@@ -1,0 +1,119 @@
+name: Windows build
+
+on:
+  push:
+    branches: [main, master, "ccr-*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read          # least privilege; no secrets are used
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 150
+    env:
+      LS_VERSION: "0.1.${{ github.run_number }}"
+      PYTHON: python
+      PYTHONUTF8: "1"
+    steps:
+      # actions pinned to full commit SHAs
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Ensure Inno Setup 6
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
+
+      - name: Build (clean venv, hash-locked deps, pip-audit, bandit, secret scan, tests, PyInstaller, installer)
+        shell: cmd
+        run: build.bat
+
+      - name: Smoke test — GUI exe launches (self-test)
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          $p = Start-Process -FilePath "dist\LectureScribe\LectureScribe.exe" -ArgumentList "--self-test" -Wait -PassThru
+          Get-Content "$env:LOCALAPPDATA\LectureScribe\logs\selftest.txt"
+          if ($p.ExitCode -ne 0) { throw "GUI self-test failed ($($p.ExitCode))" }
+
+      - name: Smoke test — CLI exe self-test
+        shell: cmd
+        run: dist\LectureScribe\lecturescribe-cli.exe selftest
+
+      - name: End-to-end — short audio AND short video (real models, two voices, chapter)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force e2e | Out-Null
+          Add-Type -AssemblyName System.Speech
+          $s = New-Object System.Speech.Synthesis.SpeechSynthesizer
+          $voices = $s.GetInstalledVoices() | ForEach-Object { $_.VoiceInfo.Name }
+          Write-Host "voices: $($voices -join ', ')"
+          $v1 = $voices[0]; $v2 = if ($voices.Count -gt 1) { $voices[1] } else { $voices[0] }
+          $pb = New-Object System.Speech.Synthesis.PromptBuilder
+          $lines = @(
+            @($v1, "Today we start with neural networks. A neural network is made of layers of neurons, and each neuron applies an activation function such as ReLU."),
+            @($v2, "Excuse me, does every neuron compute a weighted sum of the inputs?"),
+            @($v1, "Yes. Next we discuss backpropagation. Backpropagation computes the gradient of the loss using the chain rule, and gradient descent updates the weights with a learning rate. This is important, it will come in the exam."),
+            @($v2, "So the learning rate controls the size of each update?"),
+            @($v1, "Exactly. Remember the chain rule for the exam.")
+          )
+          foreach ($l in $lines) { $pb.StartVoice($l[0]); $pb.AppendText($l[1]); $pb.EndVoice(); $pb.AppendBreak([TimeSpan]::FromMilliseconds(900)) }
+          $s.SetOutputToWaveFile("$PWD\e2e\lecture_audio.wav"); $s.Speak($pb); $s.Dispose()
+          & build\ffmpeg\ffmpeg.exe -hide_banner -loglevel error -y -f lavfi -i "color=c=navy:s=320x240:r=10" -i e2e\lecture_audio.wav -shortest -c:v libx264 -pix_fmt yuv420p -c:a aac e2e\lecture_video.mp4
+          if ($LASTEXITCODE -ne 0) { throw "ffmpeg mux failed" }
+          & build\venv\Scripts\python.exe tools\make_sample_chapter.py e2e\chapter.pdf
+          $sw = [Diagnostics.Stopwatch]::StartNew()
+          & dist\LectureScribe\lecturescribe-cli.exe transcribe e2e\lecture_audio.wav e2e\lecture_video.mp4 -o e2e\out -m small --chapter e2e\chapter.pdf --speakers 2 --pdf --anki --notes
+          if ($LASTEXITCODE -ne 0) { throw "CLI transcription failed" }
+          Write-Host "e2e took $($sw.Elapsed.TotalSeconds) s"
+          & build\venv\Scripts\python.exe tools\check_e2e.py e2e\out
+          if ($LASTEXITCODE -ne 0) { throw "E2E checks failed" }
+          Copy-Item "$env:LOCALAPPDATA\LectureScribe\models\lock.json" e2e\out\models-lock.json
+
+      - name: Installer — silent per-user install, launch, uninstall
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          $setup = Get-ChildItem dist\installer\*.exe | Select-Object -First 1
+          $p = Start-Process $setup.FullName -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/CURRENTUSER","/NORESTART" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "installer failed ($($p.ExitCode))" }
+          $app = "$env:LOCALAPPDATA\Programs\LectureScribe\LectureScribe.exe"
+          if (-not (Test-Path $app)) { throw "not installed per-user at $app" }
+          $p = Start-Process $app -ArgumentList "--self-test" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "installed app self-test failed" }
+          $un = Get-ChildItem "$env:LOCALAPPDATA\Programs\LectureScribe\unins*.exe" | Select-Object -First 1
+          $p = Start-Process $un.FullName -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait -PassThru
+          Write-Host "installed, launched and uninstalled OK"
+
+      - name: Upload installer + checksums
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: LectureScribe-${{ env.LS_VERSION }}-windows
+          path: |
+            dist/installer/*.exe
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+
+      - name: Upload test outputs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: e2e-outputs
+          path: |
+            e2e/out/
+            ~/AppData/Local/LectureScribe/logs/
+          if-no-files-found: warn
