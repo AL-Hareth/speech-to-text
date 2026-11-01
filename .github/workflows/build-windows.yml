@@ -3,7 +3,8 @@ name: Windows build
 on:
   push:
     branches: [main, master, "ccr-*"]
-    tags: ["v*"]          # a version tag builds, tests AND publishes a GitHub Release
+    tags: ["v*"]
+# A push to main (or a v* tag) builds, tests AND publishes GitHub Release v<VERSION> if it doesn't exist yet.
   pull_request:
   workflow_dispatch:
 
@@ -18,8 +19,9 @@ jobs:
   build:
     runs-on: windows-2022
     timeout-minutes: 150
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
     env:
-      LS_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('0.1.{0}', github.run_number) }}
       PYTHON: python
       PYTHONUTF8: "1"
     steps:
@@ -27,6 +29,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Version
+        id: ver
+        shell: pwsh
+        run: |
+          $v = (Get-Content VERSION -Raw).Trim()
+          if ($v -notmatch '^\d+\.\d+\.\d+$') { throw "bad VERSION '$v'" }
+          $release = ("${{ github.ref }}" -eq "refs/heads/main") -or ("${{ github.ref }}".StartsWith("refs/tags/v"))
+          $ls = if ($release) { $v } else { "$v-dev.${{ github.run_number }}" }
+          "LS_VERSION=$ls" >> $env:GITHUB_ENV
+          "version=$v" >> $env:GITHUB_OUTPUT
 
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
@@ -120,7 +133,7 @@ jobs:
           if-no-files-found: warn
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-24.04
     permissions:
@@ -134,10 +147,13 @@ jobs:
       - name: Verify checksums and publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          TAG: v${{ needs.build.outputs.version }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            echo "Release $TAG already exists - bump VERSION to publish a new one."; exit 0
+          fi
           cd release
           ls -la . installer
           setup=$(ls installer/*.exe)
@@ -165,4 +181,4 @@ jobs:
           NOTES
           sed -i 's/^          //' notes.md
           gh release create "$TAG" "$(basename "$setup")" SHA256SUMS.txt \
-            --repo "$REPO" --title "LectureScribe $TAG" --notes-file notes.md --verify-tag
+            --repo "$REPO" --title "LectureScribe $TAG" --notes-file notes.md --target "${{ github.sha }}"

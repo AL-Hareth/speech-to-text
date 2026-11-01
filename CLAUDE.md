@@ -11,7 +11,7 @@ terms), optionally links it to an English textbook chapter (PDF/PPTX), and expor
 - Phase 3 (UI) — DONE.
 - Phase 4 (Chapter) — DONE.
 - Phase 5 (Extras) — DONE.
-- Phase 6 (Packaging) — DONE. Released v0.1.0 via GitHub Release (tag push -> CI publishes).
+- Phase 6 (Packaging) — DONE. Release v0.1.0 published by CI from main.
 - Phases: 1 Core · 2 PDF · 3 UI · 4 Chapter · 5 Extras · 6 Packaging.
 
 ## Folder structure
@@ -86,8 +86,9 @@ requirements.in (top-level) -> requirements.txt (uv-compiled, hash-locked, Windo
 - Cache key = file SHA256 + settings hash (model, prompt).
 - Model revisions: ALL pinned to commit SHAs in config (resolved by CI on Windows; huggingface.co is blocked
   in the dev container). File SHA256s recorded in models/lock.json on first download. test_phase6 enforces pins.
-- Release: `git tag vX.Y.Z && git push origin vX.Y.Z` -> CI builds/tests -> GitHub Release with
-  LectureScribe-Setup-vX.Y.Z.exe + SHA256SUMS.txt. Installer is not code-signed (SmartScreen warning).
+- Release: bump `VERSION`, push to `main` -> CI builds/tests -> job `release` creates tag + GitHub Release
+  v<VERSION> (LectureScribe-Setup-<VERSION>.exe + SHA256SUMS.txt); skipped if that release exists. (Tag pushes
+  are blocked from the dev container, so CI creates the tag.) Installer not code-signed (SmartScreen warning).
 - CI action pins: checkout v7.0.1 3d3c42e, setup-python v7.1.0 6d4fd22, upload-artifact v7.0.2 cf430e0,
   download-artifact v8.0.2 9000827 (resolve new SHAs with `git ls-remote --tags https://github.com/actions/<x>`).
 - PDF: reportlab, NO Paragraph/markup for untrusted text — custom flowables draw via canvas.drawString
