@@ -42,6 +42,9 @@ def main(argv: list[str] | None = None) -> int:
     t.add_argument("-m", "--model", default=config.DEFAULT_MODEL, choices=sorted(config.MODELS))
     t.add_argument("--vocab", help="text file with one custom term per line")
     t.add_argument("--no-timestamps", action="store_true")
+    t.add_argument("--pdf", action="store_true", help="also export the study PDF")
+    t.add_argument("--notes", action="store_true", help="PDF: wide ruled notes margin")
+    t.add_argument("--no-highlights", action="store_true", help="PDF: no emphasis highlighting")
     t.add_argument("-v", "--verbose", action="store_true")
     sub.add_parser("clear-cache", help="Delete cached transcripts")
     args = ap.parse_args(argv)
@@ -69,6 +72,11 @@ def main(argv: list[str] | None = None) -> int:
             p1 = write_text(out, stem + ".txt", to_txt(res["paragraphs"], not args.no_timestamps))
             p2 = write_text(out, stem + ".srt", to_srt(res["segments"]))
             print(f"\n  -> {p1}\n  -> {p2}")
+            if args.pdf:
+                from app.pdf import PdfOptions, build_pdf
+                opts = PdfOptions(timestamps=not args.no_timestamps, notes_margin=args.notes,
+                                  highlights=not args.no_highlights)
+                print(f"  -> {build_pdf(res, out, stem + '.pdf', opts)}")
         except InputError as e:
             print(f"\nError: {e}", file=sys.stderr)
             rc = 1

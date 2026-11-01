@@ -6,7 +6,8 @@ terms), optionally links it to an English textbook chapter (PDF/PPTX), and expor
 (HTTPS, pinned revision).
 
 ## Current phase
-- Phase 1 (Core) — DONE. Next: Phase 2 (PDF) — wait for user go-ahead.
+- Phase 1 (Core) — DONE.
+- Phase 2 (PDF) — DONE. Next: Phase 3 (UI) — wait for user go-ahead.
 - Phases: 1 Core · 2 PDF · 3 UI · 4 Chapter · 5 Extras · 6 Packaging.
 
 ## Folder structure
@@ -22,10 +23,15 @@ app/
   pipeline.py   process_file: hash -> cache -> extract -> transcribe (checkpoint/resume) -> paragraphs
   cache.py      JSON/npz (allow_pickle=False) per file SHA256; atomic writes; clear_all
   export.py     .txt / .srt
-tests/test_phase1.py
+  textshape.py  mixed RTL/LTR: clean -> wrap (logical) -> arabic_reshaper -> bidi.algorithm (L4 mirroring) -> font runs
+  pdf.py        reportlab study PDF: cover, 2-pass clickable TOC + outline, TextBlock flowable (tags, highlight,
+                page-splittable), notes margin, appendices A (read on your own) / B (emphasised); PdfOptions
+  assets/fonts/ Inter + Noto Naskh Arabic static Regular/Bold TTF (OFL, licences alongside)
+tools/make_fonts.py  rebuild static fonts from Google Fonts variable TTFs (SHA256-checked)
+tests/test_phase1.py, tests/test_phase2.py (LS_PDF_CHECK_DIR=dir keeps rendered PNGs for visual review)
 requirements.txt (runtime, pinned) · requirements-dev.txt (pytest, bandit, pip-audit)
 ```
-Planned modules: ui, diarize, chapter, link, segment, emphasis, pdf, qa.
+Planned modules: ui, diarize, chapter, link, segment, emphasis, qa.
 
 ## Tech decisions
 - faster-whisper 1.2.1; `multilingual=True`, `task=transcribe`, `language=None`, VAD, word timestamps,
@@ -38,6 +44,12 @@ Planned modules: ui, diarize, chapter, link, segment, emphasis, pdf, qa.
 - Model revisions: `config.MODELS[*].revision` currently None → TOFU: first download resolves `main`
   to a commit SHA and stores it + file SHA256s in `models/lock.json`. **TODO: hardcode SHAs** (huggingface.co
   was blocked in the build container).
+- PDF: reportlab, NO Paragraph/markup for untrusted text — custom flowables draw via canvas.drawString
+  (no markup injection possible). Paragraph direction = dominant script (paragraphs.is_rtl). Use
+  `bidi.algorithm.get_display` (pure-python, mirrors brackets), NOT `bidi.get_display` (rust, no mirroring).
+  Arabic runs at 1.12x size. Unsupported chars -> '?'. Only internal links (bookmarks), no URIs.
+  Paragraph dict fields consumed by PDF: text, start, rtl, speaker, emphasis, link{label,page,confidence},
+  unsure, not_in_book. Sections: [{title, start_para}] (auto 5-min sections if none).
 - Container note: huggingface.co is not reachable from the cloud dev container → real-model tests
   must run on the user's machine; tests use a stub WhisperModel.
 
@@ -45,28 +57,28 @@ Planned modules: ui, diarize, chapter, link, segment, emphasis, pdf, qa.
 ```
 python -m venv .venv && .venv/bin/pip install -r requirements-dev.txt   (Windows: .venv\Scripts\pip)
 python -m pytest -q tests
-python -m app transcribe lecture.mp4 -o out -m medium --vocab terms.txt
+python -m app transcribe lecture.mp4 -o out -m medium --vocab terms.txt --pdf --notes
 python -m app clear-cache
 bandit -q -r app ; pip-audit -r requirements.txt
 ```
 
 ## Security checklist (updated each phase)
-| Item | P1 |
-|---|---|
-| No secrets stored/required; .gitignore present | PASS |
-| PDF text escaped / WeasyPrint url_fetcher blocks URLs | n/a (P2) |
-| ffmpeg via argv list, never shell=True; protocol whitelist=file | PASS |
-| Output filenames sanitized, no path traversal (safe_join) | PASS |
-| Temp audio deleted after processing (+ leftover cleanup) | PASS |
-| Max file size limits (media 4 GB, PDF/PPTX 200 MB) | PASS (media; PDF/PPTX in P4) |
-| PPTX zip-bomb rejection | n/a (P4) |
-| Parser errors handled gracefully (friendly messages) | PASS |
-| Cache JSON/npz only, no pickle (allow_pickle=False) | PASS |
-| Models: HTTPS only, pinned revision, safetensors/CT2 preferred | PARTIAL — HTTPS + TOFU SHA pin + hash lock; hardcoded SHAs TODO |
-| Cache in %LOCALAPPDATA% | PASS |
-| CSV formula-injection escaping (csv_safe) | PASS (helper; used in P5) |
-| Logging never contains transcript content | PASS |
-| Pinned deps; pip-audit clean | PASS |
-| No telemetry/auto-update (HF telemetry disabled, token=False) | PASS |
-| No pickle / shell=True / eval / exec; bandit clean | PASS |
-| Packaging: clean venv, SHA256, per-user install | n/a (P6) |
+| Item | P1 | P2 |
+|---|---|---|
+| No secrets stored/required; .gitignore present | PASS | PASS |
+| PDF text escaped / WeasyPrint url_fetcher blocks URLs | n/a (P2) | PASS (no markup parser; drawString only; control/bidi-override chars stripped) |
+| ffmpeg via argv list, never shell=True; protocol whitelist=file | PASS | n/a |
+| Output filenames sanitized, no path traversal (safe_join) | PASS | PASS (PDF via safe_join, atomic write) |
+| Temp audio deleted after processing (+ leftover cleanup) | PASS | n/a |
+| Max file size limits (media 4 GB, PDF/PPTX 200 MB) | PASS (media; PDF/PPTX in P4) | n/a |
+| PPTX zip-bomb rejection | n/a (P4) | n/a |
+| Parser errors handled gracefully (friendly messages) | PASS | PASS |
+| Cache JSON/npz only, no pickle (allow_pickle=False) | PASS | n/a |
+| Models: HTTPS only, pinned revision, safetensors/CT2 preferred | PARTIAL — HTTPS + TOFU SHA pin + hash lock; hardcoded SHAs TODO | n/a (fonts bundled, SHA256 recorded) |
+| Cache in %LOCALAPPDATA% | PASS | n/a |
+| CSV formula-injection escaping (csv_safe) | PASS (helper; used in P5) | n/a |
+| Logging never contains transcript content | PASS | PASS |
+| Pinned deps; pip-audit clean | PASS | PASS (pymupdf bumped to 1.26.7 for PYSEC-2026-3001) |
+| No telemetry/auto-update (HF telemetry disabled, token=False) | PASS | PASS |
+| No pickle / shell=True / eval / exec; bandit clean | PASS | PASS |
+| Packaging: clean venv, SHA256, per-user install | n/a (P6) | n/a |

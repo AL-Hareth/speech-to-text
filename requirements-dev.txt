@@ -2,3 +2,4 @@
 pytest==9.0.3
 bandit==1.8.6
 pip-audit==2.9.0
+fonttools==4.60.1  # only for tools/make_fonts.py
