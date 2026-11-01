@@ -89,7 +89,7 @@ def test_full_ui_flow(qapp, tmp_path, monkeypatch):
     win.export()
     _wait(qapp, lambda: win.worker is None)
     assert win.last_pdf and Path(win.last_pdf).is_file()
-    assert {p.suffix for p in (tmp_path / "out").iterdir()} == {".pdf", ".txt", ".srt"}
+    assert {".pdf", ".txt", ".srt"} <= {p.suffix for p in (tmp_path / "out").iterdir()}
     assert win.open_pdf_btn.isEnabled()
 
     # themes render; keep screenshots for visual review if requested

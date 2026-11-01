@@ -75,9 +75,9 @@ class DropZone(QFrame):
 
 
 class StepBar(QWidget):
-    STEPS = ["Prepare", "Load model", "Transcribe", "Paragraphs", "Topics & links", "Done"]
+    STEPS = ["Prepare", "Load model", "Transcribe", "Paragraphs", "Speakers · topics · links", "Done"]
     STAGE_TO_STEP = {"chapter": 0, "hash": 0, "extract": 0, "load_model": 1, "transcribe": 2,
-                     "paragraphs": 3, "embed": 4, "link": 4, "topics": 4, "analysis_done": 4, "done": 5}
+                     "paragraphs": 3, "speakers": 4, "embed": 4, "link": 4, "topics": 4, "analysis_done": 4, "done": 5}
 
     def __init__(self, parent=None):
         super().__init__(parent)

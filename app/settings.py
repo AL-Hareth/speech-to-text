@@ -45,7 +45,8 @@ class Settings:
     highlights: bool = True
     notes_margin: bool = False
     speakers: bool = False
-    qa_search: bool = False
+    num_speakers: int = 0               # 0 = auto
+    qa_search: bool = True
     output_dir: str = ""
     project: str = "Default"
     projects: dict[str, dict] = field(default_factory=lambda: {"Default": {"vocab": []}})
@@ -82,7 +83,10 @@ class Settings:
             val = raw.get(key)
             if key == "projects":
                 continue
-            if isinstance(default, bool) and isinstance(val, bool):
+            if isinstance(default, int) and not isinstance(default, bool) and isinstance(val, int) \
+                    and not isinstance(val, bool):
+                setattr(s, key, max(0, min(val, config.MAX_SPEAKERS)))
+            elif isinstance(default, bool) and isinstance(val, bool):
                 setattr(s, key, val)
             elif isinstance(default, str) and isinstance(val, str):
                 setattr(s, key, val[:500])

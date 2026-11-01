@@ -28,9 +28,11 @@ def build_paragraphs(segments: list[dict], pause_s: float | None = None,
         if cur:
             text = " ".join(s["text"] for s in cur if s["text"]).strip()
             if text:
-                paras.append({"id": len(paras), "start": cur[0]["start"], "end": cur[-1]["end"],
-                              "text": text, "rtl": is_rtl(text),
-                              "seg_range": [cur[0]["_i"], cur[-1]["_i"]]})
+                para = {"id": len(paras), "start": cur[0]["start"], "end": cur[-1]["end"],
+                        "text": text, "rtl": is_rtl(text), "seg_range": [cur[0]["_i"], cur[-1]["_i"]]}
+                if cur[0].get("speaker"):
+                    para["speaker"] = cur[0]["speaker"]
+                paras.append(para)
         cur, nwords = [], 0
 
     for i, seg in enumerate(segments):
@@ -38,7 +40,8 @@ def build_paragraphs(segments: list[dict], pause_s: float | None = None,
         if cur:
             gap = seg["start"] - cur[-1]["end"]
             long_enough = nwords >= max_words and _SENT_END.search(cur[-1]["text"] or "")
-            if gap >= pause_s or long_enough or nwords >= max_words * 2:
+            spk_change = seg.get("speaker") != cur[-1].get("speaker")
+            if gap >= pause_s or long_enough or nwords >= max_words * 2 or spk_change:
                 flush()
         cur.append(seg)
         nwords += len(seg["text"].split())

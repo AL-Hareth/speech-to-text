@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import (QComboBox, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit,
-                               QPushButton, QStyledItemDelegate, QTableWidget, QTableWidgetItem,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QComboBox, QFrame, QHBoxLayout, QHeaderView, QInputDialog, QLabel,
+                               QLineEdit, QListWidget, QListWidgetItem, QPushButton, QStyledItemDelegate,
+                               QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from app.export import fmt_mmss
 from app.link import set_manual_link
@@ -60,11 +60,34 @@ def _norm(s: str) -> str:
     return s
 
 
+class SpeakerDelegate(QStyledItemDelegate):
+    """Editable combo: pick an existing speaker or type a new name (re-assigns the paragraph)."""
+
+    def __init__(self, panel: "ReviewPanel"):
+        super().__init__(panel)
+        self.panel = panel
+
+    def createEditor(self, parent, option, index):
+        cb = QComboBox(parent)
+        cb.setEditable(True)
+        names = sorted({p.get("speaker") for p in self.panel.result["paragraphs"] if p.get("speaker")})
+        cb.addItems(names)
+        return cb
+
+    def setEditorData(self, editor, index):
+        editor.setCurrentText(index.data() or "")
+
+    def setModelData(self, editor, model, index):
+        model.setData(index, " ".join(editor.currentText().split())[:40])
+
+
 class ReviewPanel(QWidget):
     changed = Signal()              # emitted on any edit (unsaved)
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, embedder_factory=None):
         super().__init__(parent)
+        self.embedder_factory = embedder_factory
+        self._index = None
         self.result: dict | None = None
         self._loading = False
         lay = QVBoxLayout(self)
@@ -86,6 +109,7 @@ class ReviewPanel(QWidget):
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(["Time", "Speaker", "Chapter link", "Text"])
         self.table.setItemDelegateForColumn(COL_SEC, SectionDelegate(self))
+        self.table.setItemDelegateForColumn(COL_SPK, SpeakerDelegate(self))
         self.table.verticalHeader().setVisible(False)
         self.table.setWordWrap(True)
         self.table.setAlternatingRowColors(False)
@@ -99,9 +123,34 @@ class ReviewPanel(QWidget):
         self.table.itemChanged.connect(self._on_item_changed)
         lay.addWidget(self.table, 1)
 
+        # Ask the transcript (local, returns passages only)
+        self.qa_box = QFrame()
+        self.qa_box.setObjectName("card")
+        ql = QVBoxLayout(self.qa_box)
+        ql.setContentsMargins(10, 8, 10, 8)
+        row = QHBoxLayout()
+        self.ask = QLineEdit()
+        self.ask.setPlaceholderText("Ask the transcript… e.g. what did he say about the learning rate?  (اسأل)")
+        self.ask.returnPressed.connect(self.run_question)
+        ask_btn = QPushButton("Find passages")
+        ask_btn.clicked.connect(self.run_question)
+        row.addWidget(self.ask, 1)
+        row.addWidget(ask_btn)
+        ql.addLayout(row)
+        self.answers = QListWidget()
+        self.answers.setMaximumHeight(140)
+        self.answers.setWordWrap(True)
+        self.answers.itemActivated.connect(self._jump)
+        self.answers.itemClicked.connect(self._jump)
+        ql.addWidget(self.answers)
+        lay.addWidget(self.qa_box)
+
     # ------------------------------------------------------------------ data
     def set_result(self, result: dict | None) -> None:
         self._loading = True
+        self._index = None
+        if hasattr(self, "answers"):
+            self.answers.clear()
         self.result = result
         self.table.setRowCount(0)
         paras = (result or {}).get("paragraphs", [])
@@ -123,6 +172,36 @@ class ReviewPanel(QWidget):
         self.table.resizeRowsToContents()
         self._loading = False
         self.apply_filter()
+
+    def run_question(self) -> None:
+        q = self.ask.text().strip()
+        self.answers.clear()
+        if not q or not self.result or not self.embedder_factory:
+            return
+        from app.qa import TranscriptIndex
+        try:
+            texts = tuple(p.get("text", "") for p in self.result["paragraphs"])
+            if self._index is None or self._index[0] != texts:
+                self._index = (texts, TranscriptIndex(self.result, self.embedder_factory()))
+            hits = self._index[1].search(q, k=5)
+        except Exception as e:  # noqa: BLE001
+            from app.errors import friendly_error
+            self.answers.addItem(friendly_error(e))
+            return
+        if not hits:
+            self.answers.addItem("No relevant passage found.")
+        for h in hits:
+            snippet = h["text"] if len(h["text"]) <= 220 else h["text"][:220] + "…"
+            it = QListWidgetItem(f"[{fmt_mmss(h['start'])}]  {snippet}")
+            it.setData(Qt.UserRole, h["para"])
+            self.answers.addItem(it)
+
+    def _jump(self, item: QListWidgetItem) -> None:
+        row = item.data(Qt.UserRole)
+        if isinstance(row, int):
+            self.search.clear()
+            self.table.selectRow(row)
+            self.table.scrollToItem(self.table.item(row, COL_TEXT))
 
     def sections(self) -> list[dict]:
         ch = (self.result or {}).get("chapter") or {}

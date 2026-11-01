@@ -6,10 +6,11 @@ import threading
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import QObject, QThread, Signal, Slot
+from PySide6.QtCore import QCoreApplication, QObject, QThread, Signal, Slot
 
 from app.export import to_srt, to_txt, write_text
 from app.pipeline import process_file
+from app.errors import friendly_error  # noqa: F401 (re-export)
 from app.security import InputError, safe_filename
 from app.transcribe import load_model
 
@@ -20,20 +21,11 @@ class Cancelled(Exception):
     pass
 
 
-def friendly_error(e: BaseException) -> str:
-    """Map exceptions to messages safe and useful for end users (never transcript text)."""
-    if isinstance(e, InputError):
-        return str(e)
-    if isinstance(e, MemoryError):
-        return "Not enough memory. Try a smaller model (small or medium)."
-    mod = type(e).__module__ or ""
-    if mod.startswith(("huggingface_hub", "httpx", "requests", "urllib3")) or isinstance(e, (ConnectionError, TimeoutError)):
-        return "Couldn't download the speech model. Check your internet connection and try again."
-    if isinstance(e, PermissionError):
-        return "Permission denied. Choose a different output folder."
-    if isinstance(e, OSError) and getattr(e, "errno", None) == 28:
-        return "The disk is full. Free some space and try again."
-    return f"Unexpected error ({type(e).__name__}). Details were saved to the log file."
+def _return_home(obj: QObject) -> None:
+    """Called from the worker's own thread just before finishing: move it back to the GUI thread."""
+    app = QCoreApplication.instance()
+    if app is not None and obj.thread() is not app.thread():
+        obj.moveToThread(app.thread())
 
 
 _MODELS: dict[str, object] = {}
@@ -60,8 +52,12 @@ class TranscribeWorker(QObject):
                  chapter: str | None = None,
                  model_factory: Callable[[str], object] | None = None,
                  embedder_factory: Callable[[], object] | None = None,
-                 ocr_factory: Callable[[], object] | None = None):
+                 ocr_factory: Callable[[], object] | None = None,
+                 speakers: bool = False, num_speakers: int = 0,
+                 speaker_embedder_factory: Callable[[], object] | None = None, vad=None):
         super().__init__()
+        self.speakers, self.num_speakers = speakers, num_speakers
+        self.speaker_embedder_factory, self.vad = speaker_embedder_factory, vad
         self.files, self.model, self.vocab = list(files), model, list(vocab)
         self.chapter = chapter
         self.model_factory = model_factory or cached_model
@@ -87,14 +83,12 @@ class TranscribeWorker(QObject):
         from app.embed import default_embedder
         return default_embedder()
 
-    def _analyze(self, i: int, res: dict, chapter) -> None:
-        from app.analyze import analyze
-        try:
-            analyze(res, self._embedder(), chapter, Path(self.chapter).name if chapter else None,
-                    progress=lambda st, fr: self.progress.emit(i, st, fr))
-        except Exception as e:  # noqa: BLE001 - transcript is still usable
-            log.exception("analysis failed")
-            self.warning.emit("Topics/chapter linking unavailable: " + friendly_error(e))
+    def _analyze(self, i: int, src: str, res: dict, chapter) -> None:
+        from app.analyze import enrich
+        enrich(res, src, embedder_factory=self._embedder, speakers=self.speakers,
+               num_speakers=self.num_speakers, speaker_embedder_factory=self.speaker_embedder_factory,
+               chapter=chapter, chapter_name=Path(self.chapter).name if chapter else None,
+               progress=lambda st, fr: self.progress.emit(i, st, fr), warn=self.warning.emit, vad=self.vad)
 
     def cancel(self) -> None:
         self._cancel.set()
@@ -121,7 +115,7 @@ class TranscribeWorker(QObject):
                                        model_factory=self.model_factory)
                     if self._cancel.is_set():
                         raise Cancelled()
-                    self._analyze(i, res, chapter)
+                    self._analyze(i, f, res, chapter)
                     self.progress.emit(i, "done", 1.0)
                     self.fileDone.emit(i, res)
                 except Cancelled:
@@ -131,6 +125,7 @@ class TranscribeWorker(QObject):
                     log.exception("transcription failed (file #%d)", i)
                     self.fileFailed.emit(i, friendly_error(e))
         finally:
+            _return_home(self)
             self.finished.emit()
 
 
@@ -154,6 +149,9 @@ class ExportWorker(QObject):
                                                 to_txt(res["paragraphs"], self.opts.timestamps))))
                 if "srt" in self.formats:
                     paths.append(str(write_text(self.out_dir, stem + ".srt", to_srt(res["segments"]))))
+                if "anki" in self.formats and any(p.get("emphasis") for p in res["paragraphs"]):
+                    from app.anki import write_anki
+                    paths.append(str(write_anki(res, self.out_dir, stem + "_anki.csv")))
                 if "pdf" in self.formats:
                     from app.pdf import build_pdf
                     paths.append(str(build_pdf(res, self.out_dir, stem + ".pdf", self.opts)))
@@ -162,6 +160,7 @@ class ExportWorker(QObject):
             log.exception("export failed")
             self.failed.emit(friendly_error(e))
         finally:
+            _return_home(self)
             self.finished.emit()
 
 
@@ -171,7 +170,8 @@ def start_in_thread(owner: QObject, worker: QObject) -> QThread:
     worker.moveToThread(th)
     th.started.connect(worker.run)
     worker.finished.connect(th.quit)
-    worker.finished.connect(worker.deleteLater)
     th.finished.connect(th.deleteLater)
+    # The worker is NOT deleteLater'd in its thread: it hands itself back to the GUI thread (see
+    # _return_home) so Python can release it safely there. Avoids cross-thread destruction races.
     th.start()
     return th

@@ -119,7 +119,10 @@ def ensure_model(name: str, allow_download: bool = True) -> Path:
     log.info("Downloading model %s @ %s", spec["repo"], revision[:12])
     path = Path(snapshot_download(revision=revision, **common))  # nosec B615 - revision is a verified 40-hex SHA
     files = _hash_files(path)
-    if not any(n.endswith(".safetensors") or n == "model.bin" for n in files):
+    required = spec.get("required")
+    if required and not all(r in files for r in required):
+        raise RuntimeError("Downloaded model is incomplete")
+    if not required and not any(n.endswith(".safetensors") or n == "model.bin" for n in files):
         raise RuntimeError("Downloaded model is incomplete")
     if entry.get("revision") == revision and entry.get("files") and entry["files"] != files:
         raise RuntimeError("Model files do not match the recorded hashes")

@@ -10,3 +10,6 @@ python-pptx==1.0.2
 rapidocr-onnxruntime==1.4.4
 sentence-transformers==6.2.0
 numpy
+speechbrain==1.1.2
+scikit-learn==1.9.1
+torch==2.15.0

@@ -30,7 +30,7 @@ QPushButton:hover {{ border-color: {c['accent']}; }}
 QPushButton:disabled {{ color: {c['muted']}; }}
 QPushButton#primary {{ background: {c['accent']}; color: {c['accent_text']}; border: none; font-weight: 600; }}
 QPushButton#primary:disabled {{ background: {c['border']}; }}
-QLineEdit, QPlainTextEdit, QComboBox, QListWidget, QTableWidget {{
+QLineEdit, QPlainTextEdit, QComboBox, QSpinBox, QListWidget, QTableWidget {{
     background: {c['panel2']}; border: 1px solid {c['border']}; border-radius: 7px; padding: 4px;
     selection-background-color: {c['sel']}; selection-color: {c['text']}; }}
 QComboBox QAbstractItemView {{ background: {c['panel']}; }}
@@ -42,5 +42,6 @@ QLabel#step {{ padding: 5px 10px; border-radius: 12px; background: {c['panel2']}
 QLabel#step[state="active"] {{ background: {c['accent']}; color: {c['accent_text']}; }}
 QLabel#step[state="done"] {{ background: {c['ok']}; color: #ffffff; }}
 QLabel#step[state="error"] {{ background: #c0392b; color: #ffffff; }}
+QSpinBox:disabled {{ color: {c['muted']}; }}
 QCheckBox:disabled {{ color: {c['muted']}; }}
 """

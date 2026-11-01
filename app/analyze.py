@@ -67,3 +67,47 @@ def refresh_after_edit(result: dict) -> None:
     ch = result.get("chapter")
     if ch and ch.get("sections"):
         result["read_on_own"] = gap_analysis(result["paragraphs"], ch["sections"])
+
+
+def enrich(result: dict, src, *, embedder_factory, speakers: bool = False, num_speakers: int | None = None,
+           speaker_embedder_factory=None, chapter=None, chapter_name: str | None = None,
+           progress: Callable[[str, float], None] | None = None,
+           warn: Callable[[str], None] | None = None, vad=None) -> dict:
+    """All post-transcription steps, each optional / failure-tolerant:
+    diarization -> emphasis -> embeddings (topics, chapter links, gaps)."""
+    from app.emphasis import mark_emphasis
+
+    prog = progress or (lambda s, f: None)
+    warn = warn or (lambda m: log.warning("%s", m))
+    want = {"num_speakers": int(num_speakers or 0)} if speakers else None
+    if speakers and result.get("diarization") != want:
+        prog("speakers", 0.0)
+        try:
+            from app.diarize import apply_speakers, default_speaker_embedder, diarize_file, silero_regions
+
+            emb = (speaker_embedder_factory or default_speaker_embedder)()
+            turns = diarize_file(src, result, emb, num_speakers or None, vad or silero_regions)
+            if turns:
+                apply_speakers(result, turns)
+                result["diarization"] = want
+            else:
+                warn("No speech found for speaker identification.")
+        except Exception as e:  # noqa: BLE001
+            log.exception("diarization failed")
+            from app.errors import friendly_error
+            warn("Speaker identification unavailable: " + friendly_error(e))
+    elif not speakers and result.get("diarization"):
+        for s in result.get("segments", []):
+            s.pop("speaker", None)
+        for p in result.get("paragraphs", []):
+            p.pop("speaker", None)
+        result.pop("diarization", None)
+        result.pop("speakers", None)
+    mark_emphasis(result)
+    try:
+        analyze(result, embedder_factory(), chapter, chapter_name, progress=prog)
+    except Exception as e:  # noqa: BLE001 - transcript still usable
+        log.exception("analysis failed")
+        from app.errors import friendly_error
+        warn("Topics/chapter linking unavailable: " + friendly_error(e))
+    return result

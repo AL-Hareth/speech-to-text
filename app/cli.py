@@ -42,6 +42,9 @@ def main(argv: list[str] | None = None) -> int:
     t.add_argument("-m", "--model", default=config.DEFAULT_MODEL, choices=sorted(config.MODELS))
     t.add_argument("--vocab", help="text file with one custom term per line")
     t.add_argument("--chapter", help="optional textbook chapter (PDF or PPTX) to link against")
+    t.add_argument("--speakers", type=int, nargs="?", const=0, default=None, metavar="N",
+                   help="identify speakers (optional N = number of speakers, default auto)")
+    t.add_argument("--anki", action="store_true", help="also export Anki CSV of emphasised passages")
     t.add_argument("--no-timestamps", action="store_true")
     t.add_argument("--pdf", action="store_true", help="also export the study PDF")
     t.add_argument("--notes", action="store_true", help="PDF: wide ruled notes margin")
@@ -77,18 +80,20 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"\r{_n}: {stage} {frac*100:5.1f}%", end="", flush=True)
 
             res = process_file(f, model_name=args.model, vocab=vocab, headings=hd, progress=prog)
-            try:
-                from app.analyze import analyze
-                from app.embed import default_embedder
-                analyze(res, default_embedder(), chapter, Path(args.chapter).name if chapter else None)
-            except Exception as e:  # noqa: BLE001 - transcript still exported
-                logging.getLogger(__name__).exception("analysis failed")
-                print(f"\nNote: topics/chapter linking unavailable ({type(e).__name__}).", file=sys.stderr)
+            from app.analyze import enrich
+            from app.embed import default_embedder
+            enrich(res, f, embedder_factory=default_embedder, speakers=args.speakers is not None,
+                   num_speakers=args.speakers or 0, chapter=chapter,
+                   chapter_name=Path(args.chapter).name if chapter else None,
+                   warn=lambda m: print(f"\nNote: {m}", file=sys.stderr))
             stem = safe_filename(Path(f).stem, default="transcript")
             out = Path(args.out)
             p1 = write_text(out, stem + ".txt", to_txt(res["paragraphs"], not args.no_timestamps))
             p2 = write_text(out, stem + ".srt", to_srt(res["segments"]))
             print(f"\n  -> {p1}\n  -> {p2}")
+            if args.anki:
+                from app.anki import write_anki
+                print(f"  -> {write_anki(res, out, stem + '_anki.csv')}")
             if args.pdf:
                 from app.pdf import PdfOptions, build_pdf
                 opts = PdfOptions(timestamps=not args.no_timestamps, notes_margin=args.notes,

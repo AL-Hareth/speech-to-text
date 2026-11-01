@@ -9,8 +9,8 @@ from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFileDialog, QFrame, QGridLayout,
                                QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow,
-                               QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QTabWidget,
-                               QVBoxLayout, QWidget)
+                               QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QSpinBox,
+                               QTabWidget, QVBoxLayout, QWidget)
 
 from app import cache, config
 from app.media import MEDIA_EXT
@@ -47,12 +47,14 @@ def heading(text: str, obj: str = "h2") -> QLabel:
 
 class MainWindow(QMainWindow):
     def __init__(self, settings: Settings | None = None, model_factory=None, embedder_factory=None,
-                 ocr_factory=None):
+                 ocr_factory=None, speaker_embedder_factory=None, vad=None):
         super().__init__()
         self.settings = settings or Settings.load()
         self.model_factory = model_factory          # tests inject stubs
         self.embedder_factory = embedder_factory
         self.ocr_factory = ocr_factory
+        self.speaker_embedder_factory = speaker_embedder_factory
+        self.vad = vad
         self.files: list[str] = []
         self.chapter: str | None = None
         self.results: dict[str, dict] = {}          # source path -> result
@@ -130,13 +132,22 @@ class MainWindow(QMainWindow):
         self.cb_hl = QCheckBox("Highlight emphasis")
         self.cb_notes = QCheckBox("Notes margin")
         self.cb_spk = QCheckBox("Speaker identification")
-        self.cb_qa = QCheckBox("Q&&A search index")
+        self.cb_qa = QCheckBox("Q&&A search")
         for cb, val in ((self.cb_ts, self.settings.timestamps), (self.cb_hl, self.settings.highlights),
-                        (self.cb_notes, self.settings.notes_margin)):
+                        (self.cb_notes, self.settings.notes_margin), (self.cb_spk, self.settings.speakers),
+                        (self.cb_qa, self.settings.qa_search)):
             cb.setChecked(val)
-        for cb in (self.cb_spk, self.cb_qa):          # implemented in Phase 5
-            cb.setEnabled(False)
-            cb.setToolTip("Coming in a later update")
+        self.n_spk = QSpinBox()
+        self.n_spk.setRange(0, config.MAX_SPEAKERS)
+        self.n_spk.setSpecialValueText("auto")
+        self.n_spk.setPrefix("")
+        self.n_spk.setToolTip("Number of speakers (auto = detect)")
+        self.n_spk.setValue(self.settings.num_speakers)
+        self.n_spk.setEnabled(self.cb_spk.isChecked())
+        self.cb_spk.toggled.connect(self.n_spk.setEnabled)
+        self.cb_spk.setToolTip("Detect who is speaking (downloads a small voice model on first use)")
+        self.cb_qa.setToolTip("Show the 'Ask the transcript' panel in the Review tab")
+        self.cb_qa.toggled.connect(lambda on: self.qa_box.setVisible(on))
         opts = QGridLayout()
         opts.addWidget(QLabel("Project"), 0, 0)
         opts.addWidget(self.project, 0, 1, 1, 2)
@@ -145,8 +156,13 @@ class MainWindow(QMainWindow):
         opts.addWidget(self.cb_ts, 2, 0)
         opts.addWidget(self.cb_hl, 2, 1)
         opts.addWidget(self.cb_notes, 2, 2)
-        opts.addWidget(self.cb_spk, 3, 0)
-        opts.addWidget(self.cb_qa, 3, 1)
+        spk_row = QHBoxLayout()
+        spk_row.addWidget(self.cb_spk)
+        spk_row.addWidget(QLabel("speakers:"))
+        spk_row.addWidget(self.n_spk)
+        spk_row.addStretch(1)
+        opts.addLayout(spk_row, 3, 0, 1, 2)
+        opts.addWidget(self.cb_qa, 3, 2)
         self.vocab = QPlainTextEdit()
         self.vocab.setPlaceholderText("Custom vocabulary — one term per line (e.g. backpropagation, "
                                       "Dr. Khaled, ReLU). Saved per project.")
@@ -203,16 +219,18 @@ class MainWindow(QMainWindow):
         top.addWidget(self.save_btn)
         top.addWidget(self.revert_btn)
         lay.addLayout(top)
-        self.review = ReviewPanel()
+        self.review = ReviewPanel(embedder_factory=self._get_embedder)
         self.review.changed.connect(self._mark_dirty)
         lay.addWidget(self.review, 1)
+        self.qa_box = self.review.qa_box
+        self.qa_box.setVisible(self.cb_qa.isChecked())
 
         out = QHBoxLayout()
         self.out_label = QLabel()
         self.out_label.setObjectName("muted")
         choose = QPushButton("Output folder…")
         choose.clicked.connect(self.choose_output)
-        self.export_btn = QPushButton("Export PDF + TXT + SRT")
+        self.export_btn = QPushButton("Export PDF · TXT · SRT · Anki")
         self.export_btn.setObjectName("primary")
         self.export_btn.clicked.connect(self.export)
         self.open_pdf_btn = QPushButton("Open PDF")
@@ -275,6 +293,8 @@ class MainWindow(QMainWindow):
         s.model = self.model.currentData()
         s.timestamps, s.highlights = self.cb_ts.isChecked(), self.cb_hl.isChecked()
         s.notes_margin = self.cb_notes.isChecked()
+        s.speakers, s.num_speakers = self.cb_spk.isChecked(), self.n_spk.value()
+        s.qa_search = self.cb_qa.isChecked()
         s.set_vocab(self.vocab.toPlainText())
         s.save()
 
@@ -285,7 +305,11 @@ class MainWindow(QMainWindow):
         self.worker = TranscribeWorker(self.files, self.settings.model, self.settings.vocab(),
                                        chapter=self.chapter, model_factory=self.model_factory,
                                        embedder_factory=self.embedder_factory,
-                                       ocr_factory=self.ocr_factory)
+                                       ocr_factory=self.ocr_factory,
+                                       speakers=self.settings.speakers,
+                                       num_speakers=self.settings.num_speakers,
+                                       speaker_embedder_factory=self.speaker_embedder_factory,
+                                       vad=self.vad)
         self.worker.warning.connect(self._on_warning)
         self._warnings: list[str] = []
         self.worker.progress.connect(self._on_progress)
@@ -316,7 +340,7 @@ class MainWindow(QMainWindow):
         step = StepBar.STAGE_TO_STEP.get(stage, 0)
         within = (step + (frac if stage == "transcribe" else 1.0 if stage == "done" else 0.0)) / 5
         self.progress.setValue(int(1000 * (i + min(1.0, within)) / n))
-        label = {"chapter": "Reading chapter (OCR if scanned)", "embed": "Analysing topics",
+        label = {"speakers": "Identifying speakers", "chapter": "Reading chapter (OCR if scanned)", "embed": "Analysing topics",
                  "link": "Linking to chapter", "topics": "Finding topics", "analysis_done": "Finishing",
                  "hash": "Checking file", "extract": "Extracting audio",
                  "load_model": "Loading model (first run downloads it — may take a while)",
@@ -422,6 +446,10 @@ class MainWindow(QMainWindow):
         except Exception:  # noqa: BLE001
             log.exception("re-analysis failed")
 
+    def _get_embedder(self):
+        from app.embed import default_embedder
+        return self.embedder_factory() if self.embedder_factory else default_embedder()
+
     def output_dir(self) -> Path:
         return Path(self.settings.output_dir) if self.settings.output_dir else default_output_dir()
 
@@ -446,9 +474,9 @@ class MainWindow(QMainWindow):
         if self.dirty:
             self.save_edits()
         self._collect_settings()
-        self.worker = ExportWorker([res], str(self.output_dir()), self.pdf_options(), {"txt", "srt", "pdf"})
+        self.worker = ExportWorker([res], str(self.output_dir()), self.pdf_options(), {"txt", "srt", "pdf", "anki"})
         self.worker.done.connect(self._on_exported)
-        self.worker.failed.connect(lambda m: QMessageBox.warning(self, "Export failed", m))
+        self.worker.failed.connect(self._on_export_failed)
         self.worker.finished.connect(self._on_export_finished)
         self.statusBar().showMessage("Exporting…")
         self.thread_ = start_in_thread(self, self.worker)
@@ -457,6 +485,9 @@ class MainWindow(QMainWindow):
     def _on_exported(self, paths: list[str]) -> None:
         self.last_pdf = next((p for p in paths if p.endswith(".pdf")), None)
         self.statusBar().showMessage(f"Exported {len(paths)} file(s) to {self.output_dir()}", 10000)
+
+    def _on_export_failed(self, msg: str) -> None:
+        QMessageBox.warning(self, "Export failed", msg)
 
     def _on_export_finished(self) -> None:
         self.worker = None

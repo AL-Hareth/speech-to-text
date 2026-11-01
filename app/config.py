@@ -43,8 +43,16 @@ AUX_MODELS: dict[str, dict] = {
                      "config_sentence_transformers.json", "model.safetensors", "tokenizer.json",
                      "tokenizer_config.json", "special_tokens_map.json", "sentencepiece.bpe.model",
                      "1_Pooling/config.json"],
+        "required": ["model.safetensors", "modules.json"],
+    },
+    # ECAPA-TDNN speaker embeddings. Only the weights are fetched (no HyperPyYAML -> no code exec);
+    # loaded with torch.load(weights_only=True) (restricted unpickler, tensors only).
+    "ecapa": {
+        "repo": "speechbrain/spkrec-ecapa-voxceleb", "revision": None,
+        "patterns": ["embedding_model.ckpt"], "required": ["embedding_model.ckpt"],
     },
 }
+MAX_SPEAKERS = 8
 
 # ---- Chapter parsing limits -----------------------------------------------
 MAX_CHAPTER_PAGES = 400
