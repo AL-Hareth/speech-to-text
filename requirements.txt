@@ -1,0 +1,21 @@
+# Runtime dependencies (all pinned). Install: pip install -r requirements.txt
+faster-whisper==1.2.1
+ctranslate2==4.8.4
+av==19.0.2
+huggingface_hub==2.4.0
+hf-xet==1.8.0
+tokenizers==0.23.3
+onnxruntime==1.31.1
+numpy==2.5.4
+anyio==4.15.1
+click==8.5.0
+filelock==4.2.6
+flatbuffers==25.12.19
+fsspec==2026.9.0
+h11==0.16.0
+httpcore2==2.16.0
+httpx2==2.16.0
+protobuf==7.36.2
+pyparsing==3.3.3
+tqdm==4.70.1
+typing_extensions==4.16.0
