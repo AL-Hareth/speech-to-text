@@ -85,9 +85,6 @@ jobs:
           Copy-Item "$env:LOCALAPPDATA\LectureScribe\models\lock.json" e2e\out\models-lock.json
           Copy-Item -Recurse "$env:LOCALAPPDATA\LectureScribe\logs" e2e\out\logs
 
-      - name: Resolve pinned revisions for models not used in e2e (metadata only)
-        shell: cmd
-        run: build\venv\Scripts\python.exe -c "from huggingface_hub import HfApi; [print('REVISION', r, HfApi(token=False).model_info(r, revision='main').sha) for r in ('Systran/faster-whisper-medium', 'Systran/faster-whisper-large-v3')]"
 
       - name: Installer — silent per-user install, launch, uninstall
         shell: pwsh

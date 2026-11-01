@@ -20,13 +20,12 @@ MAX_MEDIA_SECONDS = 6 * 3600         # 6 h of audio
 FFMPEG_TIMEOUT_S = 3600
 
 # ---- Whisper models (downloaded on first use, never bundled) -------------
-# revision MUST be a 40-hex commit SHA before release. While None, the first
-# download is resolved to its commit SHA and recorded in models/lock.json
-# (trust-on-first-use); later loads verify file SHA256s against that lock.
+# Every model is pinned to a commit SHA (HTTPS download); file SHA256s are recorded in
+# models/lock.json on first download and re-checked on every load.
 MODELS: dict[str, dict] = {
     "small": {"repo": "Systran/faster-whisper-small", "revision": "536b0662742c02347bc0e980a01041f333bce120"},
-    "medium": {"repo": "Systran/faster-whisper-medium", "revision": None},
-    "large-v3": {"repo": "Systran/faster-whisper-large-v3", "revision": None},
+    "medium": {"repo": "Systran/faster-whisper-medium", "revision": "08e178d48790749d25932bbc082711ddcfdfbc4f"},
+    "large-v3": {"repo": "Systran/faster-whisper-large-v3", "revision": "edaa852ec7e145841d8ffdb056a99866b5f0a478"},
 }
 DEFAULT_MODEL = "medium"
 MODEL_FILE_PATTERNS = [

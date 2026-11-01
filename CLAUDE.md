@@ -10,7 +10,8 @@ terms), optionally links it to an English textbook chapter (PDF/PPTX), and expor
 - Phase 2 (PDF) — DONE.
 - Phase 3 (UI) — DONE.
 - Phase 4 (Chapter) — DONE.
-- Phase 5 (Extras) — DONE. Next: Phase 6 (Packaging) — wait for user go-ahead.
+- Phase 5 (Extras) — DONE.
+- Phase 6 (Packaging) — DONE. Released v0.1.0 via GitHub Release (tag push -> CI publishes).
 - Phases: 1 Core · 2 PDF · 3 UI · 4 Chapter · 5 Extras · 6 Packaging.
 
 ## Folder structure
@@ -57,8 +58,21 @@ app/
   errors.py     friendly_error (Qt-free)
   analyze.py    + enrich(): diarize -> emphasis -> analyze; each step failure-tolerant (warn callback)
 lecturescribe.py  GUI entry (PyInstaller); `python -m app` = GUI, `python -m app transcribe ...` = CLI
+  selftest.py   component checks for the frozen app (ffmpeg, PDF+fonts, whisper+VAD, OCR, torch+speechbrain,
+                sentence-transformers, parsers); `LectureScribe.exe --self-test`, `lecturescribe-cli.exe selftest`
+lecturescribe_cli.py  console entry (lecturescribe-cli.exe)
+packaging/lecturescribe.spec  PyInstaller onedir, 2 EXEs (GUI windowed + CLI console), bundles ffmpeg/fonts/OCR+VAD models
+packaging/installer.iss  Inno Setup, PrivilegesRequired=lowest, {localappdata}\Programs\LectureScribe
+packaging/get_ffmpeg.ps1  gyan.dev 8.1.2 essentials over HTTPS, SHA256-pinned
+build.bat     clean venv -> requirements-build.txt (hash-locked) -> pip-audit/bandit/security_scan -> ffmpeg -> pytest
+              -> PyInstaller -> ISCC -> dist\SHA256SUMS.txt
+.github/workflows/build-windows.yml  windows-2022: build.bat, GUI/CLI self-test, e2e (TTS two voices -> wav + mp4,
+              small model, chapter, speakers, PDF/Anki checks via tools/check_e2e.py), silent install/launch/uninstall,
+              artifacts; job `release` (ubuntu, contents:write only there) on tags v* -> gh release create
+tools/security_scan.py  secrets + banned calls (pickle, shell=True, eval/exec, os.system, weights_only=False, ...)
+tools/make_sample_chapter.py, tools/check_e2e.py  CI e2e helpers
 tools/make_fonts.py  rebuild static fonts from Google Fonts variable TTFs (SHA256-checked)
-tests/test_phase1..5.py + tests/helpers.py (HashEmbedder stub) (LS_PDF_CHECK_DIR / LS_UI_CHECK_DIR keep rendered PNGs; UI tests use QT_QPA_PLATFORM=offscreen)
+tests/test_phase1..6.py + tests/helpers.py (HashEmbedder stub) (LS_PDF_CHECK_DIR / LS_UI_CHECK_DIR keep rendered PNGs; UI tests use QT_QPA_PLATFORM=offscreen)
 requirements.in (top-level) -> requirements.txt (uv-compiled, hash-locked, Windows/py3.12) · requirements-dev.txt
 ```
 
@@ -70,9 +84,12 @@ requirements.in (top-level) -> requirements.txt (uv-compiled, hash-locked, Windo
 - Resume: partial segments checkpointed every 20 s to `partial_<key>.json`; on restart audio is sliced
   from last segment end and timestamps offset.
 - Cache key = file SHA256 + settings hash (model, prompt).
-- Model revisions: `config.MODELS[*].revision` currently None → TOFU: first download resolves `main`
-  to a commit SHA and stores it + file SHA256s in `models/lock.json`. **TODO: hardcode SHAs** (huggingface.co
-  was blocked in the build container).
+- Model revisions: ALL pinned to commit SHAs in config (resolved by CI on Windows; huggingface.co is blocked
+  in the dev container). File SHA256s recorded in models/lock.json on first download. test_phase6 enforces pins.
+- Release: `git tag vX.Y.Z && git push origin vX.Y.Z` -> CI builds/tests -> GitHub Release with
+  LectureScribe-Setup-vX.Y.Z.exe + SHA256SUMS.txt. Installer is not code-signed (SmartScreen warning).
+- CI action pins: checkout v7.0.1 3d3c42e, setup-python v7.1.0 6d4fd22, upload-artifact v7.0.2 cf430e0,
+  download-artifact v8.0.2 9000827 (resolve new SHAs with `git ls-remote --tags https://github.com/actions/<x>`).
 - PDF: reportlab, NO Paragraph/markup for untrusted text — custom flowables draw via canvas.drawString
   (no markup injection possible). Paragraph direction = dominant script (paragraphs.is_rtl). Use
   `bidi.algorithm.get_display` (pure-python, mirrors brackets), NOT `bidi.get_display` (rust, no mirroring).
@@ -91,8 +108,8 @@ requirements.in (top-level) -> requirements.txt (uv-compiled, hash-locked, Windo
   (e.g. embedder download) is a warning; transcript still usable; PDF falls back to 5-min sections.
 - Diarization runs only if result['diarization'] != {num_speakers}; manual speaker edits survive.
 - PDF TOC uses result["topics"]; appendix A uses result["read_on_own"].
-- Container note: huggingface.co is not reachable from the cloud dev container → real-model tests
-  must run on the user's machine; tests use a stub WhisperModel.
+- Container note: huggingface.co is not reachable from the cloud dev container → real-model tests run in
+  Windows CI (e2e); local tests use stub models. PyInstaller spec also verified with a Linux trial build.
 
 ## Commands
 ```
@@ -105,22 +122,22 @@ uv pip compile requirements.in --python-version 3.12 --python-platform windows -
 ```
 
 ## Security checklist (updated each phase)
-| Item | P1 | P2 | P3 | P4 | P5 |
-|---|---|---|---|---|---|
-| No secrets stored/required; .gitignore present | PASS | PASS | PASS | PASS | PASS |
-| PDF text escaped / WeasyPrint url_fetcher blocks URLs | n/a (P2) | PASS (no markup parser; drawString only; control/bidi-override chars stripped) | n/a | PASS (chapter titles drawn as plain text) | PASS (speaker names drawn as plain text) |
-| ffmpeg via argv list, never shell=True; protocol whitelist=file | PASS | n/a | n/a | n/a | PASS (diarization re-extract) |
-| Output filenames sanitized, no path traversal (safe_join) | PASS | PASS (PDF via safe_join, atomic write) | PASS (export via safe_join; open only local generated paths) | PASS (cache names regex-checked) | PASS (anki via safe_join) |
-| Temp audio deleted after processing (+ leftover cleanup) | PASS | n/a | PASS (cancel path -> context manager) | n/a | PASS (temp_audio ctx) |
-| Max file size limits (media 4 GB, PDF/PPTX 200 MB) | PASS (media; PDF/PPTX in P4) | n/a | PASS (drop zone ext filter + pipeline checks) | PASS (PDF/PPTX 200 MB, 400 pages, 60 OCR pages, 2M chars) | PASS (Q&A query 500 chars, names 40 chars, vocab caps) |
-| PPTX zip-bomb rejection | n/a (P4) | n/a | n/a | PASS (entry count, total size, ratio, path traversal; tested) | n/a |
-| Parser errors handled gracefully (friendly messages) | PASS | PASS | PASS (friendly_error; settings JSON validated) | PASS (encrypted/corrupt PDF, bad zip -> InputError; per-page/shape errors skipped) | PASS (diarization/Q&A failures -> friendly warning) |
-| Cache JSON/npz only, no pickle (allow_pickle=False) | PASS | n/a | PASS (edits JSON) | PASS (embeddings npz allow_pickle=False) | PASS (turns JSON) |
-| Models: HTTPS only, pinned revision, safetensors/CT2 preferred | PARTIAL — HTTPS + TOFU SHA pin + hash lock; hardcoded SHAs TODO | n/a (fonts bundled, SHA256 recorded) | n/a | PARTIAL (embedder: HTTPS, TOFU pin + hashes, safetensors only, trust_remote_code=False; OCR models bundled in wheel) | PARTIAL (ECAPA: HTTPS, TOFU pin + hashes, ckpt via torch.load weights_only=True — malicious pickle rejected in test; no HyperPyYAML) |
-| Cache in %LOCALAPPDATA% | PASS | n/a | PASS (+settings.json) | PASS | PASS |
-| CSV formula-injection escaping (csv_safe) | PASS (helper; used in P5) | n/a | n/a | n/a | PASS (csv_safe all cells, QUOTE_ALL, #html:false; tested) |
-| Logging never contains transcript content | PASS | PASS | PASS | PASS (only counts/page numbers) | PASS (turn/speaker counts only) |
-| Pinned deps; pip-audit clean | PASS | PASS (pymupdf bumped to 1.26.7 for PYSEC-2026-3001) | PASS | PASS (hash-locked via uv compile; pip-audit clean) | PASS (torch/speechbrain/sklearn hash-locked; pip-audit clean) |
-| No telemetry/auto-update (HF telemetry disabled, token=False) | PASS | PASS | PASS | PASS (HF token=False; OCR offline) | PASS |
-| No pickle / shell=True / eval / exec; bandit clean | PASS | PASS | PASS | PASS | PASS (weights_only loader; bandit clean) |
-| Packaging: clean venv, SHA256, per-user install | n/a (P6) | n/a | n/a | n/a | n/a |
+| Item | P1 | P2 | P3 | P4 | P5 | P6 |
+|---|---|---|---|---|---|---|
+| No secrets stored/required; .gitignore present | PASS | PASS | PASS | PASS | PASS | PASS (security_scan: 0 findings; CI uses no secrets, contents:read) |
+| PDF text escaped / WeasyPrint url_fetcher blocks URLs | n/a (P2) | PASS (no markup parser; drawString only; control/bidi-override chars stripped) | n/a | PASS (chapter titles drawn as plain text) | PASS (speaker names drawn as plain text) | PASS |
+| ffmpeg via argv list, never shell=True; protocol whitelist=file | PASS | n/a | n/a | n/a | PASS (diarization re-extract) | PASS (bundled ffmpeg, SHA256-pinned download) |
+| Output filenames sanitized, no path traversal (safe_join) | PASS | PASS (PDF via safe_join, atomic write) | PASS (export via safe_join; open only local generated paths) | PASS (cache names regex-checked) | PASS (anki via safe_join) | PASS |
+| Temp audio deleted after processing (+ leftover cleanup) | PASS | n/a | PASS (cancel path -> context manager) | n/a | PASS (temp_audio ctx) | PASS (e2e verifies none left) |
+| Max file size limits (media 4 GB, PDF/PPTX 200 MB) | PASS (media; PDF/PPTX in P4) | n/a | PASS (drop zone ext filter + pipeline checks) | PASS (PDF/PPTX 200 MB, 400 pages, 60 OCR pages, 2M chars) | PASS (Q&A query 500 chars, names 40 chars, vocab caps) | PASS |
+| PPTX zip-bomb rejection | n/a (P4) | n/a | n/a | PASS (entry count, total size, ratio, path traversal; tested) | n/a | PASS |
+| Parser errors handled gracefully (friendly messages) | PASS | PASS | PASS (friendly_error; settings JSON validated) | PASS (encrypted/corrupt PDF, bad zip -> InputError; per-page/shape errors skipped) | PASS (diarization/Q&A failures -> friendly warning) | PASS |
+| Cache JSON/npz only, no pickle (allow_pickle=False) | PASS | n/a | PASS (edits JSON) | PASS (embeddings npz allow_pickle=False) | PASS (turns JSON) | PASS |
+| Models: HTTPS only, pinned revision, safetensors/CT2 preferred | PARTIAL — HTTPS + TOFU SHA pin + hash lock; hardcoded SHAs TODO | n/a (fonts bundled, SHA256 recorded) | n/a | PARTIAL (embedder: HTTPS, TOFU pin + hashes, safetensors only, trust_remote_code=False; OCR models bundled in wheel) | PARTIAL (ECAPA: HTTPS, TOFU pin + hashes, ckpt via torch.load weights_only=True — malicious pickle rejected in test; no HyperPyYAML) | PASS (all 5 models pinned to commit SHAs + lock hashes; test enforced) |
+| Cache in %LOCALAPPDATA% | PASS | n/a | PASS (+settings.json) | PASS | PASS | PASS |
+| CSV formula-injection escaping (csv_safe) | PASS (helper; used in P5) | n/a | n/a | n/a | PASS (csv_safe all cells, QUOTE_ALL, #html:false; tested) | PASS |
+| Logging never contains transcript content | PASS | PASS | PASS | PASS (only counts/page numbers) | PASS (turn/speaker counts only) | PASS |
+| Pinned deps; pip-audit clean | PASS | PASS (pymupdf bumped to 1.26.7 for PYSEC-2026-3001) | PASS | PASS (hash-locked via uv compile; pip-audit clean) | PASS (torch/speechbrain/sklearn hash-locked; pip-audit clean) | PASS (pip-audit clean in clean build venv; --require-hashes; actions pinned by SHA) |
+| No telemetry/auto-update (HF telemetry disabled, token=False) | PASS | PASS | PASS | PASS (HF token=False; OCR offline) | PASS | PASS |
+| No pickle / shell=True / eval / exec; bandit clean | PASS | PASS | PASS | PASS | PASS (weights_only loader; bandit clean) | PASS (bandit + security_scan clean) |
+| Packaging: clean venv, SHA256, per-user install | n/a (P6) | n/a | n/a | n/a | n/a | PASS (clean venv, SHA256SUMS for exes+installer, per-user install verified in CI) |
